@@ -1,0 +1,36 @@
+fs = require 'node:fs'
+path = require 'node:path'
+
+createCommandRunner = (ports) ->
+  {scan, resolveConditions, createContext, resolveMiddlewares, runMiddlewares} = ports
+  (workspace, name, args = {}, context = createContext()) ->
+    packageFolder = context and context.pkg
+    commandWorkspace = if packageFolder then path.join(workspace, packageFolder) else workspace
+    if packageFolder and (not fs.existsSync(commandWorkspace) or not fs.statSync(commandWorkspace).isDirectory())
+      throw new Error "Package not found: #{packageFolder}"
+    commands = await scan commandWorkspace
+    command = commands.find (entry) -> entry.name is name
+    throw new Error "Command not found: #{name}" unless command
+    unless await resolveConditions command.condition or {}, context
+      throw new Error "Command not available in this context: #{name}"
+    middlewares = await resolveMiddlewares commandWorkspace, context
+    runMiddlewares middlewares, context, -> command.call args, context
+
+provideCommands = (host) ->
+  ###
+  @register module commands
+  @accepts command
+  @context capability
+  ###
+  run = createCommandRunner host.commands
+  name: 'commands'
+  phase: 'wire'
+  api: {run}
+  install: ->
+    host.on 'command:run', ((payload = {}, context) ->
+      run payload.workspace or host.workspace(), payload.name, payload.args, context
+    ), {priority: 50}
+    return
+
+createHost = (args...) -> require('@thinkiac/module-runtime-compat').createHost args...
+module.exports = {provideCommands, createCommandRunner, createHost, createRuntimeModule: provideCommands}

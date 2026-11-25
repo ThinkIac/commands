@@ -1,0 +1,9 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),os=require('node:os'),fs=require('node:fs'),path=require('node:path');
+const {createCommandRunner,provideCommands}=require(process.env.COMPAT_BASELINE || '..');
+function ports(extra={}){return {scan:async()=>[{name:'go',call:async(a,c)=>({a,c})}],resolveConditions:async()=>true,createContext:()=>({default:true}),resolveMiddlewares:async()=>[],runMiddlewares:async(m,c,fn)=>fn(),...extra};}
+test('args, default context and middleware result',async()=>{assert.deepEqual(await createCommandRunner(ports())('/tmp','go',{x:1}),{a:{x:1},c:{default:true}});});
+test('scopes discovery to selected package',async()=>{const root=fs.mkdtempSync(path.join(os.tmpdir(),'commands-'));try{fs.mkdirSync(path.join(root,'p'));let scanned;const run=createCommandRunner(ports({scan:async dir=>{scanned=dir;return [{name:'go',call:()=>42}]}}));assert.equal(await run(root,'go',{}, {pkg:'p'}),42);assert.equal(scanned,path.join(root,'p'));await assert.rejects(run(root,'go',{}, {pkg:'missing'}),/Package not found/);}finally{fs.rmSync(root,{recursive:true,force:true});}});
+test('unknown command rejected',async()=>{await assert.rejects(createCommandRunner(ports())('/tmp','missing'),/Command not found/);});
+test('conditions reject execution',async()=>{await assert.rejects(createCommandRunner(ports({resolveConditions:async()=>false}))('/tmp','go'),/not available/);});
+test('handler failure propagates',async()=>{await assert.rejects(createCommandRunner(ports({scan:async()=>[{name:'go',call:()=>{throw Error('handler')}}]}))('/tmp','go'),/handler/);});
+test('event dispatch preserves workspace fallback and priority',async()=>{let event;const m=provideCommands({commands:ports(),workspace:()=>'/tmp',on:(...a)=>event=a});m.install();assert.equal(event[0],'command:run');assert.equal(event[2].priority,50);assert.deepEqual(await event[1]({name:'go',args:{x:2}}),{a:{x:2},c:{default:true}});});
